@@ -47,17 +47,38 @@ end
 
 system! "svn update"
 
+# xml:String -> [{rev:String, date:String, author:String, message:String, message_oneline:String, message_detail:[String...]}, ...]
+def parse_log_xml xml
+  doc = Nokogiri(xml)
+  doc.xpath('//logentry').map do|log|
+    message = log.xpath('msg').first.text
+    {
+      rev: log.attribute('revision').value,
+      date: log.xpath('date').first.text,
+      author: log.xpath('author').first.text,
+      message: message,
+      message_oneline: message.split("\n").first,
+      message_detail: message.split("\n")[1..-1] || [],
+    }
+  end
+end
+
+def fetch_log(rev)
+  parse_log_xml(system_read! "svn log -r #{rev} --xml #{REPO_URL}")
+end
+
+# nil | rettype(parse_log_xml)
 logs = nil
 case $filter
 when :all
   puts "Fetching logs..."
-  logs = [Nokogiri(system_read! "svn log --limit #{LIST_REVS} --xml #{REPO_URL}")]
+  logs = parse_log_xml system_read! "svn log --limit #{LIST_REVS} --xml #{REPO_URL}"
 when :unmerged
   puts "Fetching unmerged revisions..."
   revs = (system_read! "svn mergeinfo --show-revs eligible #{REPO_URL}").split(/\n/).reject(&:empty?)
   puts "Fetching logs... (#{revs.length} revisions total)"
-  logs = revs.map{|rev|
-    Nokogiri(system_read! "svn log -r #{rev} --xml #{REPO_URL}")
+  logs = revs.flat_map{|rev|
+    fetch_log(rev)
   }
 when :continue
   logs = nil
@@ -65,17 +86,11 @@ else
   raise "Unknown filter: #{$filter}"
 end
 
-def write_log_entries f,log
-  log.xpath('//logentry').each{|log|
-    rev = log.attribute('revision').value
-    date = log.xpath('date').first.text
-    author = log.xpath('author').first.text
-    message = log.xpath('msg').first.text
-    message_oneline = message.split("\n").first
-    message_detail = message.split("\n")[1..-1] || []
-    f.puts "r#{rev} #{'%020s' % author} #{message_oneline}"
-    f.puts message_detail.map{|line|"\t#{line}"}
-  }
+def write_log_entries f,logs
+  logs.each do|log|
+    f.puts "r#{log[:rev]} #{'%020s' % log[:author]} #{log[:message_oneline]}"
+    f.puts log[:message_detail].map{|line|"\t#{line}"}
+  end
 end
 
 if logs
@@ -84,9 +99,7 @@ if logs
 # リビジョンの前に"*"をつけたものがcherry-pickの対象となる
 # キャンセルしたい場合は*をつけずに終了すればよい
     EOS
-    logs.each{|log|
-      write_log_entries(f,log)
-    }
+    write_log_entries(f,logs)
   }
 end
 
