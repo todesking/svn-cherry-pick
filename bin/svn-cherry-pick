@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # -*- coding:utf-8 -*-
 require 'optparse'
+require 'nokogiri'
 
 LIST_REVS=200
 
@@ -26,9 +27,26 @@ USAGE: $0 [--filter=FILTER] [-v | --[no-]verbose] repo-url
 	exit 1
 end
 
+unless File.exists?('.svn')
+  $stderr.puts <<-EOS
+プロジェクトのルートディレクトリで実行してください
+  EOS
+  exit 1
+end
+
 REPO_URL=$*[0]
 
-require 'nokogiri'
+DATA_DIR = '.svn/svn-cherry-pick'
+
+REVCACHE_PATH = DATA_DIR + '/revcache'
+REVCACHE_SIZE = 300
+
+TARGET_PATH = DATA_DIR + '/target'
+
+MESSAGE_PATH = DATA_DIR + '/message'
+
+Dir.mkdir DATA_DIR unless File.exists?(DATA_DIR)
+
 
 class CommandFailed < StandardError; end
 
@@ -63,8 +81,22 @@ def parse_log_xml xml
   end
 end
 
+@revcache = nil
+def revcache
+  @revcache ||=
+    if File.exists?(REVCACHE_PATH)
+      File.open(REVCACHE_PATH) {|f| Marshal.load(f) }
+    else
+      {}
+    end
+end
+
+def save_revcache
+  File.open(REVCACHE_PATH, 'w') {|f| Marshal.dump(Hash[@revcache.to_a.last(REVCACHE_SIZE)], f) }
+end
+
 def fetch_log(rev)
-  parse_log_xml(system_read! "svn log -r #{rev} --xml #{REPO_URL}")
+  revcache[rev] ||= parse_log_xml(system_read! "svn log -r #{rev} --xml #{REPO_URL}")
 end
 
 # nil | rettype(parse_log_xml)
@@ -80,6 +112,7 @@ when :unmerged
   logs = revs.flat_map{|rev|
     fetch_log(rev)
   }
+  save_revcache
 when :continue
   logs = nil
 else
@@ -94,7 +127,7 @@ def write_log_entries f,logs
 end
 
 if logs
-  File.open('.svn-cherry-pick.target', 'w'){|f|
+  File.open(TARGET_PATH, 'w'){|f|
     f.puts <<-EOS
 # リビジョンの前に"*"をつけたものがcherry-pickの対象となる
 # キャンセルしたい場合は*をつけずに終了すればよい
@@ -103,11 +136,11 @@ if logs
   }
 end
 
-system "#{ENV['EDITOR']||'vi'} .svn-cherry-pick.target"
+system "#{ENV['EDITOR']||'vi'} #{TARGET_PATH}"
 
 revs=[]
-File.open('.svn-cherry-pick.target'){|target|
-  File.open('.svn-cherry-pick.message','w') {|msg|
+File.open(TARGET_PATH){|target|
+  File.open(MESSAGE_PATH,'w') {|msg|
     msg.puts "merged from #{REPO_URL}"
     on_selected_commit = false
     target.each_line {|line|
@@ -136,5 +169,5 @@ puts "==================== MERGING ===================="
 puts
 system! merge_command
 puts
-puts "コミットメッセージは .svn-cherry-pick.message にある"
+puts "コミットメッセージは #{MESSAGE_PATH} にある"
 system! "svn commit"
