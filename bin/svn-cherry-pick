@@ -34,22 +34,6 @@ unless File.exists?('.svn')
   exit 1
 end
 
-REPO_URL=$*[0]
-
-DATA_DIR = '.svn/svn-cherry-pick'
-
-REVCACHE_PATH = DATA_DIR + '/revcache'
-REVCACHE_SIZE = 300
-
-TARGET_PATH = DATA_DIR + '/target'
-
-MESSAGE_PATH = DATA_DIR + '/message'
-
-Dir.mkdir DATA_DIR unless File.exists?(DATA_DIR)
-
-
-class CommandFailed < StandardError; end
-
 def system! command
   puts "$$$ #{command}" if $verbose
   ret = system command
@@ -63,6 +47,34 @@ def system_read! command
   out
 end
 
+@repo_info_xml = nil
+def repo_info_xml
+  @repo_info_xml ||= Nokogiri(system_read! "svn info --xml")
+end
+
+def repo_root
+  repo_info_xml.xpath('//root').text
+end
+
+def repo_url
+  repo_info_xml.xpath('//url').text
+end
+
+DATA_DIR = '.svn/svn-cherry-pick'
+
+MERGE_FROM_PATH = $*[0].gsub(/^\//, '')
+MERGE_FROM_URL = repo_root + '/' + MERGE_FROM_PATH
+
+REVCACHE_PATH = DATA_DIR + '/revcache'
+REVCACHE_SIZE = 300
+
+TARGET_PATH = DATA_DIR + '/target'
+
+MESSAGE_PATH = DATA_DIR + '/message'
+
+Dir.mkdir DATA_DIR unless File.exists?(DATA_DIR)
+
+class CommandFailed < StandardError; end
 system! "svn update"
 
 # xml:String -> [{rev:String, date:String, author:String, message:String, message_oneline:String, message_detail:[String...]}, ...]
@@ -96,7 +108,7 @@ def save_revcache
 end
 
 def fetch_log(rev)
-  revcache[rev] ||= parse_log_xml(system_read! "svn log -r #{rev} --xml #{REPO_URL}")
+  revcache[rev] ||= parse_log_xml(system_read! "svn log -r #{rev} --xml #{MERGE_FROM_URL}")
 end
 
 # nil | rettype(parse_log_xml)
@@ -104,10 +116,10 @@ logs = nil
 case $filter
 when :all
   puts "Fetching logs..."
-  logs = parse_log_xml system_read! "svn log --limit #{LIST_REVS} --xml #{REPO_URL}"
+  logs = parse_log_xml system_read! "svn log --limit #{LIST_REVS} --xml #{MERGE_FROM_URL}"
 when :unmerged
   puts "Fetching unmerged revisions..."
-  revs = (system_read! "svn mergeinfo --show-revs eligible #{REPO_URL}").split(/\n/).reject(&:empty?)
+  revs = (system_read! "svn mergeinfo --show-revs eligible #{MERGE_FROM_URL}").split(/\n/).reject(&:empty?)
   puts "Fetching logs... (#{revs.length} revisions total)"
   logs = revs.flat_map{|rev|
     fetch_log(rev)
@@ -141,7 +153,7 @@ system "#{ENV['EDITOR']||'vi'} #{TARGET_PATH}"
 revs=[]
 File.open(TARGET_PATH){|target|
   File.open(MESSAGE_PATH,'w') {|msg|
-    msg.puts "merged from #{REPO_URL}"
+    msg.puts "merged from #{MERGE_FROM_PATH}"
     on_selected_commit = false
     target.each_line {|line|
       if line =~ /^\*\s*r(\d+)\s/
@@ -161,7 +173,7 @@ if revs.empty?
   exit 1
 end
 
-merge_command = "(set -e; for rev in #{revs.map{|r|r.to_i}.sort.join(' ')}; do svn merge -c $rev #{REPO_URL}; done; svn status)"
+merge_command = "(set -e; for rev in #{revs.map{|r|r.to_i}.sort.join(' ')}; do svn merge -c $rev #{MERGE_FROM_URL}; done; svn status)"
 
 puts "==================== COMMAND ===================="
 puts merge_command
