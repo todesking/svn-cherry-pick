@@ -14,11 +14,13 @@ opt.parse!(ARGV)
 
 unless $*.length == 1
 	puts <<-EOS
-USAGE: $0 [--filter=FILTER] [-v | --[no-]verbose] repo-url
+USAGE: $0 [--filter=FILTER] [-v | --[no-]verbose] merge-from-path
 	起動すると、repo-urlからFILTERで指定されたリビジョンを表示した状態でエディタが開く
 	マージしたいやつの先頭に*つける
 	cherry pickマージされる
 
+    merge-from-path:
+      マージしたいブランチのパス。 リポジトリルートからの相対。
     FILTER:
       all: デフォルト。最新#{LIST_REVS}リビジョン
       unmerged: 未マージのやつ全部
