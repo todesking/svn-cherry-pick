@@ -16,8 +16,9 @@ unless $*.length == 1
 	puts <<-EOS
 USAGE: $0 [--filter=FILTER] [-v | --[no-]verbose] merge-from-path
 	起動すると、repo-urlからFILTERで指定されたリビジョンを表示した状態でエディタが開く
-	マージしたいやつの先頭に*つける
-	cherry pickマージされる
+	マージしたいやつの先頭に印をつける
+    * 通常のcherry pickマージ
+    . mergeinfoのみ更新
 
     merge-from-path:
       マージしたいブランチのパス。 リポジトリルートからの相対。
@@ -153,15 +154,23 @@ end
 system "#{ENV['EDITOR']||'vi'} #{TARGET_PATH}"
 
 revs=[]
+merge_only_revs=[]
 File.open(TARGET_PATH){|target|
   File.open(MESSAGE_PATH,'w') {|msg|
     msg.puts "merged from #{MERGE_FROM_PATH}"
     on_selected_commit = false
     target.each_line {|line|
-      if line =~ /^\*\s*r(\d+)\s/
-        revs << $1
+      if line =~ /^([.*])\s*r(\d+)\s/
+        target_revs, prefix =
+          case $1
+          when '*' then [revs, '']
+          when '.' then [merge_only_revs, '[mergeinfo] ']
+          else raise
+          end
+
+        target_revs << Integer($2)
         on_selected_commit = true
-        msg.puts line.gsub(/^\*\s*/,'')
+        msg.puts(prefix + line.gsub(/^[.*]\s*/,''))
       elsif line =~ /^r\d+/
         on_selected_commit = false
       else
@@ -170,12 +179,25 @@ File.open(TARGET_PATH){|target|
     }
   }
 }
-if revs.empty?
+if revs.empty? && merge_only_revs.empty?
   puts "==================== ABORTED ===================="
   exit 1
 end
 
-merge_command = "(set -e; for rev in #{revs.map{|r|r.to_i}.sort.join(' ')}; do svn merge -c $rev #{MERGE_FROM_URL}; done; svn status)"
+merge_command =
+  if revs.empty?
+    ""
+  else
+    " (for rev in #{revs.sort.join(' ')}; do svn merge -c $rev #{MERGE_FROM_URL}; done);"
+  end
+merge_only_command =
+  if merge_only_revs.empty?
+    ""
+  else
+    " (for rev in #{merge_only_revs.sort.join(' ')}; do svn merge -c $rev --record-only #{MERGE_FROM_URL}; done);"
+  end
+
+merge_command = "(set -e;#{merge_only_command}#{merge_command}svn status)"
 
 puts "==================== COMMAND ===================="
 puts merge_command
